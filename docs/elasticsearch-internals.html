@@ -1,0 +1,1092 @@
+<title>Inside the Index — what Elasticsearch does with your Wikipedia corpus</title>
+
+<style>
+  /* ---- tokens: light is the base, both dark states redefine only these ---- */
+  :root {
+    --paper: #EFF2F3;
+    --surface: #F8FAFA;
+    --sunk: #E5EAEC;
+    --ink: #10171C;
+    --muted: #57646C;
+    --rule: #CFD7DA;
+    --rule-soft: #E0E6E8;
+
+    --client: #0B6E75;
+    --client-wash: #E1EDEE;
+    --engine: #935607;
+    --engine-wash: #F3E9D9;
+
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --serif: "Iowan Old Style", Charter, "Bitstream Charter", "Palatino Linotype", Palatino, Georgia, serif;
+
+    --step--1: 0.78rem;
+    --step-0: 1.02rem;
+    --step-1: 1.22rem;
+    --step-2: 1.55rem;
+    --step-3: 2.1rem;
+    --step-4: 3rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0C1114;
+      --surface: #131A1E;
+      --sunk: #182126;
+      --ink: #E3E9EB;
+      --muted: #8A99A1;
+      --rule: #253036;
+      --rule-soft: #1B2429;
+
+      --client: #46B5BA;
+      --client-wash: #10262A;
+      --engine: #D9A24A;
+      --engine-wash: #2A2116;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper: #0C1114;
+    --surface: #131A1E;
+    --sunk: #182126;
+    --ink: #E3E9EB;
+    --muted: #8A99A1;
+    --rule: #253036;
+    --rule-soft: #1B2429;
+
+    --client: #46B5BA;
+    --client-wash: #10262A;
+    --engine: #D9A24A;
+    --engine-wash: #2A2116;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: var(--step-0);
+    line-height: 1.62;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 24px 96px;
+  }
+
+  /* ---- masthead ---- */
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding: 64px 0 28px;
+    margin-bottom: 40px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: var(--step--1);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 18px;
+  }
+
+  h1 {
+    font-family: var(--mono);
+    font-size: var(--step-4);
+    line-height: 1.04;
+    letter-spacing: -0.035em;
+    font-weight: 600;
+    margin: 0 0 18px;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-size: var(--step-1);
+    line-height: 1.5;
+    color: var(--muted);
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    margin-top: 36px;
+    border-top: 1px solid var(--rule);
+  }
+
+  .stat {
+    flex: 1 1 130px;
+    padding: 14px 18px 14px 0;
+    border-right: 1px solid var(--rule-soft);
+  }
+
+  .stat:last-child { border-right: 0; }
+
+  .stat b {
+    display: block;
+    font-family: var(--mono);
+    font-size: var(--step-1);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat span {
+    font-family: var(--mono);
+    font-size: var(--step--1);
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  /* ---- layout with toc rail ---- */
+  .layout { display: block; }
+
+  nav.toc { display: none; }
+
+  @media (min-width: 1140px) {
+    .layout {
+      display: grid;
+      grid-template-columns: 178px minmax(0, 1fr);
+      gap: 56px;
+      align-items: start;
+    }
+    nav.toc {
+      display: block;
+      position: sticky;
+      top: 24px;
+      font-family: var(--mono);
+      font-size: var(--step--1);
+      line-height: 1.9;
+    }
+  }
+
+  nav.toc p {
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 10px;
+  }
+
+  nav.toc a {
+    display: block;
+    color: var(--ink);
+    text-decoration: none;
+    border-left: 2px solid var(--rule);
+    padding-left: 12px;
+  }
+
+  nav.toc a:hover,
+  nav.toc a:focus-visible { border-left-color: var(--client); color: var(--client); }
+
+  /* ---- prose ---- */
+  .col { max-width: 68ch; }
+
+  h2 {
+    font-family: var(--mono);
+    font-size: var(--step-3);
+    letter-spacing: -0.03em;
+    font-weight: 600;
+    line-height: 1.12;
+    margin: 76px 0 8px;
+    text-wrap: balance;
+  }
+
+  h2 .part {
+    display: block;
+    font-size: var(--step--1);
+    letter-spacing: 0.16em;
+    color: var(--muted);
+    font-weight: 400;
+    margin-bottom: 10px;
+  }
+
+  h3 {
+    font-family: var(--mono);
+    font-size: var(--step-2);
+    letter-spacing: -0.02em;
+    font-weight: 600;
+    margin: 52px 0 6px;
+    text-wrap: balance;
+  }
+
+  h3 .num {
+    color: var(--client);
+    margin-right: 12px;
+  }
+
+  h4 {
+    font-family: var(--mono);
+    font-size: var(--step-0);
+    letter-spacing: 0.01em;
+    font-weight: 600;
+    margin: 32px 0 4px;
+  }
+
+  p { margin: 0 0 18px; }
+
+  a { color: var(--client); }
+
+  strong { font-weight: 600; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--sunk);
+    padding: 0.12em 0.36em;
+    border-radius: 3px;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: var(--step--1);
+    line-height: 1.65;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--client);
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 0 0 22px;
+  }
+
+  pre code { background: none; padding: 0; font-size: inherit; }
+
+  .lede {
+    font-size: var(--step-1);
+    line-height: 1.5;
+  }
+
+  /* ---- client / engine split ---- */
+  .split {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2px;
+    margin: 26px 0 30px;
+    border: 1px solid var(--rule);
+  }
+
+  @media (min-width: 720px) {
+    .split { grid-template-columns: 1fr 1fr; }
+  }
+
+  .split > div { padding: 18px 20px 20px; background: var(--surface); }
+
+  .split .you { background: var(--client-wash); }
+  .split .es { background: var(--engine-wash); }
+
+  .split h5 {
+    font-family: var(--mono);
+    font-size: var(--step--1);
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+
+  .split .you h5 { color: var(--client); }
+  .split .es h5 { color: var(--engine); }
+
+  .split p { font-size: 0.95rem; margin-bottom: 12px; }
+  .split p:last-child { margin-bottom: 0; }
+
+  .split ul { margin: 0; padding-left: 18px; font-size: 0.95rem; }
+  .split li { margin-bottom: 7px; }
+
+  /* ---- figures ---- */
+  figure {
+    margin: 40px 0 44px;
+    padding: 0;
+  }
+
+  .figframe {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 22px 20px;
+    overflow-x: auto;
+  }
+
+  figure svg {
+    display: block;
+    width: 100%;
+    min-width: 640px;
+    max-width: 100%;
+    height: auto;
+    color: var(--ink);
+  }
+
+  figcaption {
+    font-family: var(--mono);
+    font-size: var(--step--1);
+    line-height: 1.6;
+    color: var(--muted);
+    margin-top: 12px;
+    max-width: 78ch;
+  }
+
+  figcaption b { color: var(--ink); font-weight: 600; }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    font-family: var(--mono);
+    font-size: var(--step--1);
+    color: var(--muted);
+    margin: 0 0 26px;
+    padding: 10px 14px;
+    border: 1px dashed var(--rule);
+  }
+
+  .legend span { display: flex; align-items: center; gap: 8px; }
+  .swatch { width: 14px; height: 14px; border: 2px solid; display: inline-block; }
+  .swatch.c { border-color: var(--client); background: var(--client-wash); }
+  .swatch.e { border-color: var(--engine); background: var(--engine-wash); }
+  .swatch.f { border-color: var(--muted); border-style: dashed; background: transparent; }
+
+  /* ---- tables ---- */
+  .tablewrap { overflow-x: auto; margin: 26px 0 32px; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 560px;
+    font-size: 0.94rem;
+  }
+
+  th, td {
+    text-align: left;
+    padding: 9px 14px 9px 0;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+
+  th {
+    font-family: var(--mono);
+    font-size: var(--step--1);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  td.api, td.sym, td.file {
+    font-family: var(--mono);
+    font-size: 0.84rem;
+    white-space: nowrap;
+    color: var(--engine);
+  }
+
+  td.n {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    font-size: 0.84rem;
+  }
+
+  /* ---- callout ---- */
+  .note {
+    border-left: 3px solid var(--engine);
+    background: var(--engine-wash);
+    padding: 16px 20px;
+    margin: 26px 0 30px;
+  }
+
+  .note p { margin-bottom: 10px; }
+  .note p:last-child { margin-bottom: 0; }
+
+  .note h5 {
+    font-family: var(--mono);
+    font-size: var(--step--1);
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--engine);
+    margin: 0 0 8px;
+    font-weight: 600;
+  }
+
+  footer {
+    margin-top: 84px;
+    padding-top: 22px;
+    border-top: 2px solid var(--ink);
+    font-family: var(--mono);
+    font-size: var(--step--1);
+    color: var(--muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Wikipedia · Elasticsearch 9.5.0 · Lucene 10.5.0</p>
+    <h1>Inside the Index</h1>
+    <p class="standfirst">Every step between a 1&nbsp;GB XML dump and a ranked list of results — which part your code does, which part Lucene does, and what actually gets written to disk.</p>
+
+    <div class="stats">
+      <div class="stat"><b>20,865</b><span>documents</span></div>
+      <div class="stat"><b>356 MB</b><span>index size</span></div>
+      <div class="stat"><b>5</b><span>segments</span></div>
+      <div class="stat"><b>1</b><span>shard</span></div>
+      <div class="stat"><b>198 s</b><span>full ingest</span></div>
+    </div>
+  </header>
+
+  <div class="layout">
+
+    <nav class="toc">
+      <p>Contents</p>
+      <a href="#write">I · Write path</a>
+      <a href="#index">II · Inverted index</a>
+      <a href="#segments">III · Segments</a>
+      <a href="#read">IV · Read path</a>
+      <a href="#rank">V · Ranking</a>
+      <a href="#disk">VI · On disk</a>
+      <a href="#apis">VII · API calls</a>
+      <a href="#gaps">VIII · Loose ends</a>
+    </nav>
+
+    <main>
+
+      <div class="col">
+        <p class="lede">There is one boundary that explains almost everything in this system: the HTTP request. On your side of it, Node reads bytes, strips wiki markup, and writes JSON. On the other side, Lucene turns text into terms, terms into postings lists, and postings lists into immutable files. Your code never builds an index. It builds <em>documents</em>, and hands them over.</p>
+
+        <p>This document follows one corpus — your 20,865 Wikipedia articles — across that boundary and back. Every number in it comes from your actual run.</p>
+      </div>
+
+      <div class="legend">
+        <span><i class="swatch c"></i> your code</span>
+        <span><i class="swatch e"></i> Elasticsearch / Lucene</span>
+        <span><i class="swatch f"></i> file on disk</span>
+      </div>
+
+      <!-- ============ PART I ============ -->
+      <h2 id="write"><span class="part">Part I</span>The write path</h2>
+
+      <div class="col">
+        <p>Four stages run in order, but only the last two involve Elasticsearch at all. Stages 1 and 2 are pure text processing: they exist because a MediaWiki dump is not a corpus, it is a backup of an editing system.</p>
+      </div>
+
+      <figure>
+        <div class="figframe">
+          <svg viewBox="0 0 1080 300" role="img" aria-label="The ingest pipeline: the XML dump is read twice — once to collect redirects, once to clean articles into a JSONL file — and only then bulk-loaded into Elasticsearch over HTTP.">
+            <defs>
+              <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+              </marker>
+            </defs>
+
+            <!-- pass 1 box -->
+            <rect x="180" y="26" width="200" height="46" fill="var(--client-wash)" stroke="var(--client)" stroke-width="2"/>
+            <text x="280" y="47" text-anchor="middle" font-family="var(--mono)" font-size="13" fill="currentColor">RedirectIndex</text>
+            <text x="280" y="63" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--muted)">6,254 stubs → 4,536 targets</text>
+
+            <!-- main row -->
+            <rect x="16" y="130" width="128" height="52" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 3"/>
+            <text x="80" y="152" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">enwiki .xml</text>
+            <text x="80" y="168" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--muted)">1.05 GB</text>
+
+            <rect x="180" y="130" width="152" height="52" fill="var(--client-wash)" stroke="var(--client)" stroke-width="2"/>
+            <text x="256" y="152" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">WikiXmlParser</text>
+            <text x="256" y="168" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--muted)">SAX · streaming</text>
+
+            <rect x="368" y="130" width="152" height="52" fill="var(--client-wash)" stroke="var(--client)" stroke-width="2"/>
+            <text x="444" y="152" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">WikiCleaner</text>
+            <text x="444" y="168" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--muted)">wikitext → prose</text>
+
+            <rect x="556" y="130" width="140" height="52" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 3"/>
+            <text x="626" y="152" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">wikipedia.jsonl</text>
+            <text x="626" y="168" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--muted)">556 MB</text>
+
+            <rect x="732" y="130" width="128" height="52" fill="var(--client-wash)" stroke="var(--client)" stroke-width="2"/>
+            <text x="796" y="152" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">BulkIndexer</text>
+            <text x="796" y="168" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--muted)">~110 requests</text>
+
+            <rect x="930" y="130" width="134" height="52" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+            <text x="997" y="152" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">Elasticsearch</text>
+            <text x="997" y="168" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--muted)">wikipedia_v1</text>
+
+            <!-- boundary -->
+            <line x1="897" y1="16" x2="897" y2="284" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="4 4"/>
+            <text x="897" y="12" text-anchor="middle" font-family="var(--mono)" font-size="10.5" letter-spacing="1.5" fill="var(--muted)">HTTP</text>
+
+            <!-- arrows along main row -->
+            <line x1="144" y1="156" x2="174" y2="156" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+            <line x1="332" y1="156" x2="362" y2="156" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+            <line x1="520" y1="156" x2="550" y2="156" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+            <line x1="696" y1="156" x2="726" y2="156" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+            <line x1="860" y1="156" x2="924" y2="156" stroke="var(--engine)" stroke-width="2" marker-end="url(#ar)"/>
+
+            <text x="159" y="120" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">27,353</text>
+            <text x="535" y="120" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">20,865</text>
+            <text x="892" y="120" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--engine)">POST /_bulk</text>
+
+            <!-- pass 1 loop -->
+            <line x1="256" y1="130" x2="256" y2="76" stroke="var(--client)" stroke-width="1.5" marker-end="url(#ar)"/>
+            <text x="266" y="108" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">pass 1</text>
+            <polyline points="380,49 444,49 444,124" fill="none" stroke="var(--client)" stroke-width="1.5" marker-end="url(#ar)"/>
+            <text x="452" y="44" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">alternate titles</text>
+
+            <!-- brackets -->
+            <polyline points="16,214 16,222 696,222 696,214" fill="none" stroke="var(--muted)" stroke-width="1"/>
+            <text x="356" y="240" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--muted)">built once — 176 s</text>
+
+            <polyline points="556,258 556,266 1064,266 1064,258" fill="none" stroke="var(--engine)" stroke-width="1"/>
+            <text x="810" y="284" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--engine)">every reindex — 22 s</text>
+          </svg>
+        </div>
+        <figcaption><b>Two passes, one cache.</b> The dump is read twice because a redirect stub can appear before or after the article it points at. The JSONL in the middle is the reason a mapping change costs 22 seconds instead of 198 — everything to its left never runs again.</figcaption>
+      </figure>
+
+      <h3 id="s1"><span class="num">01</span>Parse</h3>
+
+      <div class="col">
+        <p>A 1.05&nbsp;GB file cannot be loaded into a DOM. <code>WikiXmlParser</code> uses SAX, which emits events — <em>tag opened</em>, <em>text</em>, <em>tag closed</em> — and never holds more than the page currently being assembled. Peak memory stayed at 228&nbsp;MB against a file five times that size.</p>
+
+        <p>The subtlety is that <code>&lt;id&gt;</code> means three different things depending on where it sits: page id, revision id, contributor id. The state machine therefore keys on the <em>path</em> (<code>revision/contributor/id</code>), not the tag name.</p>
+
+        <p>No Elasticsearch involvement at all. This stage produces plain JavaScript objects.</p>
+      </div>
+
+      <h3 id="s2"><span class="num">02</span>Clean</h3>
+
+      <div class="col">
+        <p>The <code>&lt;text&gt;</code> element is wikitext, not prose: <code>{{Short description|…}}</code>, <code>{{Sfnm|1a1=Marshall|…}}</code>, <code>[[political philosophy]]</code>, infoboxes, tables. Indexing it raw would make <code>sfn</code> one of the most common terms in the corpus and fill every result snippet with braces.</p>
+
+        <p>Rendering to plain text is the slow part of the whole pipeline — roughly 100 documents per second, which is where 176 of your 198 seconds went. It also yields the structure for free: categories, section headings, and outgoing links.</p>
+
+        <p>77 articles were skipped here. Those render to under 100 characters of prose — template-only pages with nothing to search.</p>
+      </div>
+
+      <h3 id="s3"><span class="num">03</span>Create the index</h3>
+
+      <div class="col">
+        <p>This is the first HTTP contact. <code>PUT /wikipedia_v1</code> carries the settings and the mapping, and the response comes back before a single document exists.</p>
+      </div>
+
+      <div class="split">
+        <div class="you">
+          <h5>Your code</h5>
+          <p>Sends a JSON body with <code>settings</code> (1 shard, 0 replicas, 1s refresh) and <code>mappings</code> (21 field definitions, <code>dynamic: strict</code>).</p>
+          <p>Then issues <code>POST /_aliases</code> to point <code>wikipedia</code> at the new index in one atomic action.</p>
+        </div>
+        <div class="es">
+          <h5>Elasticsearch</h5>
+          <ul>
+            <li>Writes the index into <b>cluster state</b> and elects a location for its one primary shard.</li>
+            <li>Compiles each field definition into a <b>FieldMapper</b> — the object that will decide, per field, which analyzer runs and which Lucene fields get written.</li>
+            <li>Creates an empty Lucene <code>IndexWriter</code> on disk. Zero segments.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="col">
+        <p>The mapping is the contract. <code>dynamic: strict</code> means a document carrying a field the mapping does not know about is <em>rejected</em>, rather than silently creating a new field with a guessed type. Your load reported <code>failed 0</code>, which is a stronger statement than it looks: all 20,865 documents matched the declared schema exactly.</p>
+      </div>
+
+      <h3 id="s4"><span class="num">04</span>Bulk load</h3>
+
+      <div class="col">
+        <p>The bulk API takes newline-delimited JSON — two lines per document, an action line and a source line:</p>
+
+        <pre><code>{"index":{"_index":"wikipedia_v1","_id":"12"}}
+{"wiki_id":12,"title":"Anarchism","text":"Anarchism is a political …
+
+{"index":{"_index":"wikipedia_v1","_id":"25"}}
+{"wiki_id":25,"title":"Autism","text":"Autism is a neurodevelopmental …</code></pre>
+
+        <p>At a 5&nbsp;MB flush threshold, your 556&nbsp;MB corpus became roughly 110 of these requests, two in flight at a time. Throughput was 965 documents per second.</p>
+
+        <p>Using <code>_id = wiki_id</code> is what makes the whole load idempotent. MediaWiki page ids are stable, so re-running updates documents in place. Note what "update" means to Lucene, though — <b>segments are immutable</b>, so an update is a delete marker on the old document plus a fresh insert. Re-running the same load twice doubles the deleted-document count until a merge reclaims it.</p>
+      </div>
+
+      <div class="split">
+        <div class="you">
+          <h5>Your code</h5>
+          <ul>
+            <li>Reads JSONL line by line, never holding more than one document.</li>
+            <li>Accumulates NDJSON to 5&nbsp;MB, sends, repeats.</li>
+            <li>Sets <code>refresh_interval: -1</code> first, restores it after.</li>
+          </ul>
+        </div>
+        <div class="es">
+          <h5>Elasticsearch, per document</h5>
+          <ul>
+            <li>Routes it: <code>murmur3(_id) % shards</code>. With one shard, everything lands in the same place.</li>
+            <li>Validates against the mapping.</li>
+            <li>Runs the analyzer on every <code>text</code> field.</li>
+            <li>Adds terms to the in-memory buffer, and appends the raw document to the <b>translog</b>.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ============ PART II ============ -->
+      <h2 id="index"><span class="part">Part II</span>What "indexing a field" actually means</h2>
+
+      <div class="col">
+        <p>This is the core of the entire system, and it is smaller than it sounds. A string goes in; a sorted list of terms and a list of document ids per term come out.</p>
+      </div>
+
+      <figure>
+        <div class="figframe">
+          <svg viewBox="0 0 1080 480" role="img" aria-label="A field value passes through character filters, a tokenizer and token filters to become terms, which are stored in a sorted term dictionary alongside postings lists of document ids and positions.">
+            <defs>
+              <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+              </marker>
+            </defs>
+
+            <text x="40" y="20" font-family="var(--mono)" font-size="10.5" letter-spacing="1.4" fill="var(--muted)">FIELD VALUE</text>
+            <rect x="40" y="28" width="1000" height="42" fill="var(--sunk)" stroke="var(--rule)" stroke-width="1"/>
+            <text x="56" y="55" font-family="var(--mono)" font-size="13" fill="currentColor">"Anarchism is a political philosophy and movement"</text>
+
+            <line x1="540" y1="70" x2="540" y2="96" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
+
+            <!-- analyzer bracket -->
+            <rect x="150" y="102" width="780" height="66" fill="none" stroke="var(--engine)" stroke-width="1" stroke-dasharray="4 4"/>
+            <text x="160" y="96" font-family="var(--mono)" font-size="10.5" letter-spacing="1.4" fill="var(--engine)">STANDARD ANALYZER</text>
+
+            <rect x="168" y="114" width="210" height="42" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+            <text x="273" y="132" text-anchor="middle" font-family="var(--mono)" font-size="12" fill="currentColor">character filters</text>
+            <text x="273" y="147" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">none configured</text>
+
+            <rect x="435" y="114" width="210" height="42" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+            <text x="540" y="132" text-anchor="middle" font-family="var(--mono)" font-size="12" fill="currentColor">standard tokenizer</text>
+            <text x="540" y="147" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">Unicode UAX#29</text>
+
+            <rect x="702" y="114" width="210" height="42" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+            <text x="807" y="132" text-anchor="middle" font-family="var(--mono)" font-size="12" fill="currentColor">lowercase filter</text>
+            <text x="807" y="147" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">no stemming yet</text>
+
+            <line x1="378" y1="135" x2="429" y2="135" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
+            <line x1="645" y1="135" x2="696" y2="135" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
+
+            <line x1="540" y1="168" x2="540" y2="196" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
+
+            <!-- tokens -->
+            <text x="40" y="192" font-family="var(--mono)" font-size="10.5" letter-spacing="1.4" fill="var(--muted)">TERMS + POSITIONS</text>
+            <g font-family="var(--mono)" font-size="12" text-anchor="middle">
+              <rect x="40" y="200" width="132" height="34" fill="var(--surface)" stroke="var(--engine)" stroke-width="1.5"/>
+              <text x="106" y="222" fill="currentColor">anarchism</text>
+              <text x="106" y="250" font-size="10.5" fill="var(--muted)">0</text>
+
+              <rect x="184" y="200" width="132" height="34" fill="var(--surface)" stroke="var(--engine)" stroke-width="1.5"/>
+              <text x="250" y="222" fill="currentColor">is</text>
+              <text x="250" y="250" font-size="10.5" fill="var(--muted)">1</text>
+
+              <rect x="328" y="200" width="132" height="34" fill="var(--surface)" stroke="var(--engine)" stroke-width="1.5"/>
+              <text x="394" y="222" fill="currentColor">a</text>
+              <text x="394" y="250" font-size="10.5" fill="var(--muted)">2</text>
+
+              <rect x="472" y="200" width="132" height="34" fill="var(--surface)" stroke="var(--engine)" stroke-width="1.5"/>
+              <text x="538" y="222" fill="currentColor">political</text>
+              <text x="538" y="250" font-size="10.5" fill="var(--muted)">3</text>
+
+              <rect x="616" y="200" width="132" height="34" fill="var(--surface)" stroke="var(--engine)" stroke-width="1.5"/>
+              <text x="682" y="222" fill="currentColor">philosophy</text>
+              <text x="682" y="250" font-size="10.5" fill="var(--muted)">4</text>
+
+              <rect x="760" y="200" width="132" height="34" fill="var(--surface)" stroke="var(--engine)" stroke-width="1.5"/>
+              <text x="826" y="222" fill="currentColor">and</text>
+              <text x="826" y="250" font-size="10.5" fill="var(--muted)">5</text>
+
+              <rect x="904" y="200" width="136" height="34" fill="var(--surface)" stroke="var(--engine)" stroke-width="1.5"/>
+              <text x="972" y="222" fill="currentColor">movement</text>
+              <text x="972" y="250" font-size="10.5" fill="var(--muted)">6</text>
+            </g>
+
+            <line x1="540" y1="258" x2="540" y2="288" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
+            <text x="552" y="278" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">inverted</text>
+
+            <!-- two structures -->
+            <rect x="40" y="296" width="470" height="164" fill="var(--surface)" stroke="var(--engine)" stroke-width="2"/>
+            <text x="58" y="320" font-family="var(--mono)" font-size="11" letter-spacing="1.2" fill="var(--engine)">TERM DICTIONARY · .tim / .tip</text>
+            <g font-family="var(--mono)" font-size="12.5" fill="currentColor">
+              <text x="58" y="346">a</text>
+              <text x="58" y="366">and</text>
+              <text x="58" y="386">anarchism</text>
+              <text x="58" y="406">is</text>
+              <text x="230" y="346">movement</text>
+              <text x="230" y="366">philosophy</text>
+              <text x="230" y="386">political</text>
+            </g>
+            <text x="58" y="440" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">sorted · prefix-indexed by an FST</text>
+
+            <rect x="570" y="296" width="470" height="164" fill="var(--surface)" stroke="var(--engine)" stroke-width="2"/>
+            <text x="588" y="320" font-family="var(--mono)" font-size="11" letter-spacing="1.2" fill="var(--engine)">POSTINGS · .doc / .pos</text>
+            <g font-family="var(--mono)" font-size="12" fill="currentColor">
+              <text x="588" y="348">anarchism → 12:1@0 · 588:4@0,31,77 · 1043:2@…</text>
+              <text x="588" y="374">political  → 12:1@3 · 297:6@12,44,90,…</text>
+              <text x="588" y="400">movement → 12:1@6 · 88:2@5,61 · 402:1@9</text>
+            </g>
+            <text x="588" y="440" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">docID : freq @ positions — delta-encoded</text>
+          </svg>
+        </div>
+        <figcaption><b>The inversion.</b> Each distinct term is stored once, paired with the list of documents containing it. This is why search cost scales with the number of <em>matching</em> documents rather than the size of the corpus — finding "anarchism" never touches the other 20,864 articles. The illustrative postings show the shape, not your literal doc ids.</figcaption>
+      </figure>
+
+      <div class="col">
+        <p>Three things follow directly from this picture.</p>
+
+        <p><strong>Analysis is irreversible and happens at write time.</strong> Once <code>Anarchism</code> is stored as the term <code>anarchism</code>, the original casing exists only in <code>_source</code>, which is never searched. Changing the analyzer means re-analyzing every document — a full reindex. That is the single constraint that shaped this project's architecture.</p>
+
+        <p><strong>Your Phase 1 analyzer is deliberately weak.</strong> The <code>standard</code> analyzer tokenizes and lowercases, and that is all. It does not stem, so <code>running</code> and <code>run</code> are unrelated terms. It does not remove stop words, so <code>is</code>, <code>a</code> and <code>and</code> above are all indexed as real terms with real postings lists. That is your baseline, and Phase 3 is where you measure what changes.</p>
+
+        <p><strong>Positions cost space.</strong> They are stored because <code>match_phrase</code> needs them — asking whether <code>plate</code> occurs immediately before <code>tectonics</code> is a positions query. A field that will never be phrase-searched can drop them with <code>index_options</code>.</p>
+      </div>
+
+      <!-- ============ PART III ============ -->
+      <h2 id="segments"><span class="part">Part III</span>Why a document isn't searchable the moment you index it</h2>
+
+      <div class="col">
+        <p>Searchability and durability are separate properties, achieved by separate mechanisms, at different times. Conflating them is the most common source of confusion about Elasticsearch.</p>
+      </div>
+
+      <figure>
+        <div class="figframe">
+          <svg viewBox="0 0 1080 340" role="img" aria-label="A document becomes durable when written to the translog, but only becomes searchable when a refresh turns the in-memory buffer into a Lucene segment.">
+            <defs>
+              <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+              </marker>
+            </defs>
+
+            <g>
+              <rect x="150" y="30" width="160" height="56" fill="var(--client-wash)" stroke="var(--client)" stroke-width="2"/>
+              <text x="230" y="54" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">index request</text>
+              <text x="230" y="71" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">_bulk</text>
+
+              <rect x="330" y="30" width="160" height="56" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+              <text x="410" y="54" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">buffer + translog</text>
+              <text x="410" y="71" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">fsync per request</text>
+
+              <rect x="510" y="30" width="160" height="56" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+              <text x="590" y="54" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">refresh</text>
+              <text x="590" y="71" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">→ new segment</text>
+
+              <rect x="690" y="30" width="160" height="56" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+              <text x="770" y="54" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">flush</text>
+              <text x="770" y="71" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">commit · trim translog</text>
+
+              <rect x="870" y="30" width="160" height="56" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+              <text x="950" y="54" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">merge</text>
+              <text x="950" y="71" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">5 → fewer</text>
+
+              <line x1="310" y1="58" x2="325" y2="58" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar3)"/>
+              <line x1="490" y1="58" x2="505" y2="58" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar3)"/>
+              <line x1="670" y1="58" x2="685" y2="58" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar3)"/>
+              <line x1="850" y1="58" x2="865" y2="58" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar3)"/>
+            </g>
+
+            <line x1="40" y1="112" x2="1040" y2="112" stroke="var(--rule)" stroke-width="1"/>
+
+            <!-- searchable row -->
+            <text x="138" y="152" text-anchor="end" font-family="var(--mono)" font-size="11" letter-spacing="1.2" fill="var(--muted)">SEARCHABLE</text>
+            <g stroke="var(--muted)" stroke-width="2" fill="none">
+              <path d="M 222 140 L 238 156 M 238 140 L 222 156"/>
+              <path d="M 402 140 L 418 156 M 418 140 L 402 156"/>
+            </g>
+            <g stroke="var(--engine)" stroke-width="2.5" fill="none" stroke-linecap="round">
+              <path d="M 581 148 L 588 155 L 600 139"/>
+              <path d="M 761 148 L 768 155 L 780 139"/>
+              <path d="M 941 148 L 948 155 L 960 139"/>
+            </g>
+
+            <line x1="40" y1="176" x2="1040" y2="176" stroke="var(--rule-soft)" stroke-width="1"/>
+
+            <!-- durable row -->
+            <text x="138" y="212" text-anchor="end" font-family="var(--mono)" font-size="11" letter-spacing="1.2" fill="var(--muted)">DURABLE</text>
+            <g stroke="var(--muted)" stroke-width="2" fill="none">
+              <path d="M 222 200 L 238 216 M 238 200 L 222 216"/>
+            </g>
+            <g stroke="var(--engine)" stroke-width="2.5" fill="none" stroke-linecap="round">
+              <path d="M 401 208 L 408 215 L 420 199"/>
+              <path d="M 581 208 L 588 215 L 600 199"/>
+              <path d="M 761 208 L 768 215 L 780 199"/>
+              <path d="M 941 208 L 948 215 L 960 199"/>
+            </g>
+
+            <line x1="40" y1="236" x2="1040" y2="236" stroke="var(--rule)" stroke-width="1"/>
+
+            <!-- the gap -->
+            <polyline points="330,262 330,272 670,272 670,262" fill="none" stroke="var(--engine)" stroke-width="1.5"/>
+            <text x="500" y="292" text-anchor="middle" font-family="var(--mono)" font-size="12" fill="var(--engine)">the gap: safe on disk, invisible to every query</text>
+
+            <text x="540" y="322" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--muted)">refresh_interval: -1 during bulk removes step 3 entirely until the end</text>
+          </svg>
+        </div>
+        <figcaption><b>Two independent guarantees.</b> The translog makes a document survive a crash; a refresh makes it visible to search. Between them sits a window where your data is perfectly safe and completely unfindable — which is exactly the trade the bulk loader exploits.</figcaption>
+      </figure>
+
+      <div class="col">
+        <h4>Refresh</h4>
+        <p>Every second by default, Lucene takes whatever is in the in-memory buffer and writes it as a new <b>segment</b> — a self-contained, immutable mini-index. Only then does a new searcher open over it and the documents become findable. This is the "near" in near-real-time.</p>
+
+        <p>Your loader sets <code>refresh_interval: -1</code> for the duration of the load. Without that, 200 seconds of indexing would have produced hundreds of tiny segments, each needing to be merged away, competing with the load for the same disk. With it, you finished with <b>5 segments</b>.</p>
+
+        <h4>Flush</h4>
+        <p>A refresh does not guarantee the data is on disk — the new segment may still be in the filesystem cache. A <b>flush</b> performs a Lucene commit, fsyncs, and truncates the translog, because the translog's only job is to replay anything not yet committed. Elasticsearch triggers this automatically.</p>
+
+        <h4>Merge</h4>
+        <p>Because segments are immutable, deletes are only <em>marks</em> and updates are delete-plus-insert. Merging rewrites several segments into one, physically dropping deleted documents and shrinking the term dictionary. Your 5 segments will consolidate on their own; <code>POST /wikipedia/_forcemerge?max_num_segments=1</code> does it on demand — useful on a read-only index, wasteful on a live one.</p>
+      </div>
+
+      <!-- ============ PART IV ============ -->
+      <h2 id="read"><span class="part">Part IV</span>The read path</h2>
+
+      <figure>
+        <div class="figframe">
+          <svg viewBox="0 0 1080 560" role="img" aria-label="A search request is built into query DSL by your code, then Elasticsearch resolves the alias, analyzes the query, walks postings lists, scores with BM25, keeps the top results in a priority queue and finally fetches their source documents.">
+            <defs>
+              <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+              </marker>
+            </defs>
+
+            <rect x="300" y="20" width="420" height="48" fill="var(--client-wash)" stroke="var(--client)" stroke-width="2"/>
+            <text x="510" y="49" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">GET /search?q=plate+tectonics</text>
+
+            <line x1="510" y1="68" x2="510" y2="92" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar4)"/>
+
+            <rect x="300" y="92" width="420" height="48" fill="var(--client-wash)" stroke="var(--client)" stroke-width="2"/>
+            <text x="510" y="112" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">SearchService.multiMatchQuery()</text>
+            <text x="510" y="129" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">builds the query DSL — 6 weighted fields</text>
+
+            <line x1="510" y1="140" x2="510" y2="182" stroke="var(--engine)" stroke-width="2" marker-end="url(#ar4)"/>
+
+            <line x1="40" y1="166" x2="1040" y2="166" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="4 4"/>
+            <text x="1036" y="160" text-anchor="end" font-family="var(--mono)" font-size="10.5" letter-spacing="1.4" fill="var(--muted)">HTTP · POST /wikipedia/_search</text>
+
+            <g>
+              <rect x="300" y="188" width="420" height="48" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+              <text x="510" y="217" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">resolve alias → wikipedia_v1</text>
+              <text x="746" y="217" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">one indirection, zero cost</text>
+
+              <line x1="510" y1="236" x2="510" y2="256" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar4)"/>
+
+              <rect x="300" y="256" width="420" height="48" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+              <text x="510" y="285" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">analyze query → [plate, tectonics]</text>
+              <text x="746" y="285" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">same analyzer that indexed the field</text>
+
+              <line x1="510" y1="304" x2="510" y2="324" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar4)"/>
+
+              <rect x="300" y="324" width="420" height="48" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+              <text x="510" y="353" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">term dictionary → postings, per field</text>
+              <text x="746" y="353" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">12 lookups: 2 terms × 6 fields</text>
+
+              <line x1="510" y1="372" x2="510" y2="392" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar4)"/>
+
+              <rect x="300" y="392" width="420" height="48" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+              <text x="510" y="421" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">BM25 per field · dis_max keeps the best</text>
+              <text x="746" y="421" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">best_fields, not a sum</text>
+
+              <line x1="510" y1="440" x2="510" y2="460" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar4)"/>
+
+              <rect x="300" y="460" width="420" height="48" fill="var(--engine-wash)" stroke="var(--engine)" stroke-width="2"/>
+              <text x="510" y="489" text-anchor="middle" font-family="var(--mono)" font-size="12.5" fill="currentColor">top-k queue → fetch _source</text>
+              <text x="746" y="489" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">query_then_fetch</text>
+            </g>
+
+            <text x="40" y="540" font-family="var(--mono)" font-size="11" fill="var(--muted)">Only the final 10 documents have their stored _source read from disk — scoring never touches it.</text>
+          </svg>
+        </div>
+        <figcaption><b>Two phases, not one.</b> The query phase collects ids and scores in a bounded priority queue; the fetch phase loads full documents for the survivors only. With multiple shards the queue lives on the coordinating node and merges per-shard results — which is why <code>from + size</code> gets expensive at depth, and why <code>search_after</code> exists.</figcaption>
+      </figure>
+
+      <div class="col">
+        <p>The step worth dwelling on is <code>dis_max</code>. Your <code>multi_match</code> with <code>type: best_fields</code> does <em>not</em> add up the scores from <code>title</code>, <code>redirect</code>, <code>opening_text</code> and <code>text</code>. It computes each independently and takes the <b>maximum</b>.</p>
+
+        <p>That choice matters. Summing would let a long article that mentions "tectonics" forty times in the body outrank the article actually titled <em>Plate tectonics</em>. Taking the max means the single strongest signal wins, which for encyclopedic content is almost always the title.</p>
+      </div>
+
+      <!-- ============ PART V ============ -->
+      <h2 id="rank"><span class="part">Part V</span>Why this document ranked first</h2>
+
+      <figure>
+        <div class="figframe">
+          <svg viewBox="0 0 1080 240" role="img" aria-label="The BM25 scoring formula: the sum over query terms of IDF multiplied by a saturating term-frequency factor normalised by field length against the corpus average.">
+            <text x="40" y="40" font-family="var(--mono)" font-size="11" letter-spacing="1.4" fill="var(--muted)">BM25 — LUCENE'S DEFAULT SIMILARITY</text>
+
+            <text x="60" y="128" font-family="var(--mono)" font-size="17" fill="currentColor">score(q, D)  =</text>
+            <text x="238" y="128" font-family="var(--mono)" font-size="22" fill="var(--muted)">&#8721;</text>
+            <text x="232" y="150" font-family="var(--mono)" font-size="11" fill="var(--muted)">t &#8712; q</text>
+
+            <text x="290" y="128" font-family="var(--mono)" font-size="17" font-weight="600" fill="var(--engine)">IDF(t)</text>
+            <text x="382" y="128" font-family="var(--mono)" font-size="17" fill="var(--muted)">&#215;</text>
+
+            <text x="700" y="112" text-anchor="middle" font-family="var(--mono)" font-size="17" fill="currentColor">f &#183; (k&#8321; + 1)</text>
+            <line x1="424" y1="122" x2="976" y2="122" stroke="currentColor" stroke-width="1.5"/>
+            <text x="700" y="150" text-anchor="middle" font-family="var(--mono)" font-size="17" fill="currentColor">f  +  k&#8321; &#183; ( 1 &#8722; b + b &#183; dl / avgdl )</text>
+
+            <line x1="316" y1="136" x2="316" y2="180" stroke="var(--engine)" stroke-width="1"/>
+            <text x="316" y="198" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--engine)">rarity</text>
+
+            <line x1="620" y1="98" x2="620" y2="70" stroke="var(--engine)" stroke-width="1"/>
+            <text x="620" y="62" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--engine)">saturating frequency</text>
+
+            <line x1="880" y1="158" x2="880" y2="180" stroke="var(--engine)" stroke-width="1"/>
+            <text x="880" y="198" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="var(--engine)">length normalisation</text>
+
+            <text x="40" y="228" font-family="var(--mono)" font-size="11" fill="var(--muted)">k&#8321; = 1.2 · b = 0.75 — Lucene defaults, unchanged in your index</text>
+          </svg>
+        </div>
+        <figcaption><b>Three forces, one number.</b> Rarity rewards discriminating terms, saturation stops repetition from dominating, and length normalisation stops long documents from winning by sheer size. Everything your <code>/explain</code> endpoint returns is one of these inputs.</figcaption>
+      </figure>
+
+      <div class="col">
+        <p>Your <code>BM25Explainer</code> pulls each of these out of Lucene's explanation tree. This is how the symbols map to the JSON it returns:</p>
+      </div>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>Symbol</th><th>Meaning</th><th>/explain key</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="sym">IDF(t)</td><td>How rare the term is: <code>ln(1 + (N − n + 0.5) / (n + 0.5))</code>. A term in every document scores near zero.</td><td class="sym">idf</td></tr>
+            <tr><td class="sym">n</td><td>Documents containing the term</td><td class="sym">docFreq</td></tr>
+            <tr><td class="sym">N</td><td>Documents having that field</td><td class="sym">docCount</td></tr>
+            <tr><td class="sym">f</td><td>Occurrences of the term in this document</td><td class="sym">termFreq</td></tr>
+            <tr><td class="sym">dl</td><td>Length of this field in this document</td><td class="sym">fieldLength</td></tr>
+            <tr><td class="sym">avgdl</td><td>Average length of that field across the corpus</td><td class="sym">avgFieldLength</td></tr>
+            <tr><td class="sym">k₁</td><td>Saturation point — the 10th occurrence adds almost nothing over the 5th</td><td class="n">1.2, fixed</td></tr>
+            <tr><td class="sym">b</td><td>How strongly length is penalised. At <code>b = 0</code>, length is ignored entirely.</td><td class="n">0.75, fixed</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <h5>Your avgdl of 1.755</h5>
+        <p>The <code>/explain</code> output you ran returned <code>avgdl: 1.755</code>. That is the <code>title</code> field: across 20,865 articles the average title is under two tokens long.</p>
+        <p>This is why <code>title^3</code> is doing more work than the number suggests. A one-token title matching a query term has <code>dl/avgdl ≈ 0.57</code>, which already inflates the score through length normalisation — <em>before</em> the 3× boost multiplies it again. Length normalisation and your boost compound.</p>
+        <p>It also means the boost is hard to reason about by eye, which is the argument for a judgment set: <code>title^3</code> is currently a guess, not a measurement.</p>
+      </div>
+
+      <div class="col">
+        <h4>Statistics are per shard</h4>
+        <p><code>N</code> and <code>n</code> are counted within a shard, not across the index. With your single shard they are exact corpus-wide figures. Split into five shards and each computes IDF from its own fifth, so the same document can score differently depending on where it landed — the classic surprise when a small index is over-sharded. One shard for 20,865 documents is the right call, and it makes your scores reproducible.</p>
+      </div>
+
+      <!-- ============ PART VI ============ -->
+      <h2 id="disk"><span class="part">Part VI</span>What's actually on disk</h2>
+
+      <div class="col">
+        <p>Inside the container, a segment is a group of files sharing a name prefix. Each holds one of the structures above:</p>
+      </div>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>File</th><th>Holds</th><th>Read when</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="file">.tip</td><td>Term index — an <b>FST</b> mapping term prefixes to offsets in the dictionary, held in memory</td><td>every term lookup</td></tr>
+            <tr><td class="file">.tim</td><td>Term dictionary — the sorted terms themselves</td><td>every term lookup</td></tr>
+            <tr><td class="file">.doc</td><td>Postings — document ids per term, delta-encoded</td><td>matching</td></tr>
+            <tr><td class="file">.pos</td><td>Term positions within each document</td><td><code>match_phrase</code> only</td></tr>
+            <tr><td class="file">.fdt / .fdx</td><td>Stored fields — your <code>_source</code>, LZ4-compressed</td><td>fetch phase, top 10 only</td></tr>
+            <tr><td class="file">.dvd / .dvm</td><td>Doc values — columnar, per-field</td><td>sorting, aggregations</td></tr>
+            <tr><td class="file">.liv</td><td>Live-docs bitset — which documents are <em>not</em> deleted</td><td>every query</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="col">
+        <p>This explains a number that surprised both of us: 556&nbsp;MB of JSONL became a <b>356&nbsp;MB index</b>. The <code>_source</code> is stored LZ4-compressed, and the inverted index stores each distinct term once rather than every occurrence of it. The searchable structure genuinely costs less than the text it was built from.</p>
+
+        <h4>Doc values, and why <code>title.keyword</code> exists</h4>
+        <p>The inverted index answers "which documents contain this term?" It cannot answer "what is the title of document 12?" without scanning — wrong direction. Sorting and aggregating need the <em>column</em>, so Lucene writes a second, columnar copy: doc values.</p>
+        <p><code>text</code> fields have no doc values, which is why your mapping declares <code>title.keyword</code> and <code>categories.keyword</code>. Those subfields are the ones that will make Phase 5's category aggregation possible. It is the same source string written to disk twice, in two shapes, for two questions.</p>
+
+        <h4>Where the FST turns up</h4>
+        <p>A finite state transducer stores a large set of strings in very little memory by sharing prefixes and suffixes, while still mapping each to a value. Lucene uses one for the term index so that locating a term never requires a linear scan of the dictionary. The same structure powers completion suggesters — which is the machinery your Phase 2 autocomplete will sit on.</p>
+      </div>
+
+      <!-- ============ PART VII ============ -->
+      <h2 id="apis"><span class="part">Part VII</span>Every API call your ingest makes</h2>
+
+      <div class="col">
+        <p>In order, from <code>npm run ingest</code> to a loaded index. Stages 1 and 2 issue none of these — they never touch the network.</p>
+      </div>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>#</th><th>Call</th><th>What Elasticsearch does</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="n">1</td><td class="api">GET /</td><td>Returns version info — your banner line</td></tr>
+            <tr><td class="n">2</td><td class="api">HEAD /wikipedia_v1</td><td>Existence check before recreating</td></tr>
+            <tr><td class="n">3</td><td class="api">DELETE /wikipedia_v1</td><td>Removes the index and its files, if present</td></tr>
+            <tr><td class="n">4</td><td class="api">PUT /wikipedia_v1</td><td>Writes settings and mapping to cluster state; allocates the primary shard; opens an empty <code>IndexWriter</code></td></tr>
+            <tr><td class="n">5</td><td class="api">HEAD /_alias/wikipedia</td><td>Does the alias already exist?</td></tr>
+            <tr><td class="n">6</td><td class="api">GET /_alias/wikipedia</td><td>Which index does it point at now?</td></tr>
+            <tr><td class="n">7</td><td class="api">POST /_aliases</td><td>Atomic remove + add, so readers never see a gap</td></tr>
+            <tr><td class="n">8</td><td class="api">PUT /wikipedia_v1/_settings</td><td><code>refresh_interval: -1</code> — stop opening new segments</td></tr>
+            <tr><td class="n">9</td><td class="api">POST /_bulk</td><td>×110. Route, validate, analyze, buffer, append to translog</td></tr>
+            <tr><td class="n">10</td><td class="api">PUT /wikipedia_v1/_settings</td><td><code>refresh_interval: 1s</code> — restore near-real-time</td></tr>
+            <tr><td class="n">11</td><td class="api">POST /wikipedia_v1/_refresh</td><td>Flush the buffer to a segment; everything becomes searchable</td></tr>
+            <tr><td class="n">12</td><td class="api">GET /wikipedia_v1/_count</td><td>Verification — your 20,865</td></tr>
+            <tr><td class="n">13</td><td class="api">GET /wikipedia_v1/_stats</td><td>Size and segment count</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="col">
+        <p>Worth trying by hand, since these show the structures rather than describe them:</p>
+
+        <pre><code># see the analyzer in action — no indexing involved
+GET /wikipedia/_analyze
+{ "field": "text", "text": "The QUICK brown foxes" }
+
+# the actual terms stored for one document
+GET /wikipedia/_termvectors/12?fields=title
+
+# segments, with deleted-document counts
+GET /_cat/segments/wikipedia?v
+
+# where time goes inside a query
+GET /wikipedia/_search
+{ "profile": true, "query": { "match": { "text": "tectonics" } } }</code></pre>
+
+        <p><code>_analyze</code> is the single most useful of these while you are still forming intuition — it is the only way to see exactly what a field becomes before committing 20,865 documents to it.</p>
+      </div>
+
+      <!-- ============ PART VIII ============ -->
+      <h2 id="gaps"><span class="part">Part VIII</span>Loose ends in the current index</h2>
+
+      <div class="col">
+        <p>Three things in your mapping are not yet doing what their comments claim. Better to know now than to discover them while debugging relevance.</p>
+
+        <h4><code>title.exact</code> is currently identical to <code>title</code></h4>
+        <p>The subfield declares <code>analyzer: "standard"</code>, and the parent <code>title</code> — having no analyzer specified — also defaults to <code>standard</code>. Both fields therefore produce exactly the same terms, and you are paying to index the same strings twice.</p>
+        <p>It becomes meaningful the moment Phase 3 gives <code>title</code> a stemming analyzer while <code>.exact</code> stays standard. Until then it is dead weight, and worth deleting if you want a clean baseline.</p>
+
+        <h4>Stop words are being indexed</h4>
+        <p>The <code>standard</code> analyzer ships with an empty stop-word list. Every <code>the</code>, <code>is</code> and <code>of</code> across 20,865 articles has a full postings list. That is intentional for Phase 1 — it is the baseline you will measure against — but it is a real share of your 356&nbsp;MB.</p>
+
+        <h4><code>outgoing_links</code> is indexed but unqueried</h4>
+        <p>Up to 1,000 keyword values per document, and nothing in your API touches them yet. They are there for link analysis later; if the index size ever becomes a problem, this is the first field to reconsider.</p>
+      </div>
+
+      <div class="col">
+        <h4>What changes in Phase 3</h4>
+        <p>Everything in Part II is fixed at write time, which is why the analyzer work needs a reindex rather than a settings change. The sequence is: define <code>wikipedia_v2</code> with the new analyzer, replay <code>data/wikipedia.jsonl</code> into it, then move the alias. Your API queries <code>wikipedia</code>, so it picks up the swap without a restart.</p>
+        <p>That is the payoff for the JSONL cache and the alias indirection — two decisions made in Phase 1 that only start earning their keep now.</p>
+      </div>
+
+      <footer>
+        Built from the run of 2026-08-09 · 20,865 documents · Elasticsearch 9.5.0 on Lucene 10.5.0 · single node, single shard
+      </footer>
+
+    </main>
+  </div>
+</div>

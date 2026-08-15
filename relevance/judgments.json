@@ -1,0 +1,30 @@
+{
+  "note": "SEED SET — these titles are guesses, not verified against your index. Run `npm run relevance` and read the MISSING column: anything listed there is not in this dump chunk and should be replaced. Use `npm run judge -- \"your query\"` to see real candidate titles, then paste the good ones in here. A judgment set is only useful once you have written it yourself; 20-30 queries is enough to detect a regression.",
+  "k": 10,
+  "judgments": [
+    {
+      "query": "anarchism",
+      "relevant": ["Anarchism"]
+    },
+    {
+      "query": "political philosophy",
+      "relevant": ["Anarchism"]
+    },
+    {
+      "query": "autism",
+      "relevant": ["Autism"]
+    },
+    {
+      "query": "albedo",
+      "relevant": ["Albedo"]
+    },
+    {
+      "query": "abraham lincoln",
+      "relevant": ["Abraham Lincoln"]
+    },
+    {
+      "query": "aristotle",
+      "relevant": ["Aristotle"]
+    }
+  ]
+}

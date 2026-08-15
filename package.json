@@ -1,0 +1,30 @@
+{
+  "name": "wikipedia-elastic-search",
+  "version": "1.0.0",
+  "description": "Index a MediaWiki XML dump into Elasticsearch and study what Lucene does underneath",
+  "type": "module",
+  "license": "ISC",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "compile": "tsc",
+    "ingest": "tsx cli/ingest.ts",
+    "reindex": "tsx cli/reindex.ts",
+    "serve": "tsx cli/serve.ts",
+    "relevance": "tsx cli/relevance.ts",
+    "judge": "tsx cli/judge.ts",
+    "inspect": "tsx cli/inspect.ts",
+    "corpus": "tsx cli/buildJsonl.ts",
+    "index": "tsx cli/bulkIndex.ts"
+  },
+  "dependencies": {
+    "@elastic/elasticsearch": "^9.5.0",
+    "fastify": "^5.2.0",
+    "sax": "^1.6.1",
+    "wtf_wikipedia": "^10.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
