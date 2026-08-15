@@ -234,7 +234,7 @@ export class SearchService {
       query,
       // A total ordering is required for search_after to be stable, so score
       // alone is not enough — wiki_id breaks ties deterministically.
-      sort: [{ _score: 'desc' }, { wiki_id: 'asc' }],
+      sort: [{ _score: { order: 'desc' } }, { wiki_id: { order: 'asc' } }],
       ...(params.highlight === true ? { highlight: QueryBuilder.highlight() } : {}),
       // Exact counts past 10k cost real work; ask for the true number anyway,
       // since 21k documents makes it cheap and the number is more useful.

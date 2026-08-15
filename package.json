@@ -13,8 +13,7 @@
     "relevance": "tsx cli/relevance.ts",
     "judge": "tsx cli/judge.ts",
     "inspect": "tsx cli/inspect.ts",
-    "corpus": "tsx cli/buildJsonl.ts",
-    "index": "tsx cli/bulkIndex.ts"
+    "corpus": "tsx cli/buildJsonl.ts"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^9.5.0",
